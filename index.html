@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voxel Kitchen Adventure</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: 'Courier New', Courier, monospace; }
+        #game-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .interactive { pointer-events: auto; }
+        .pixel-shadow { box-shadow: 4px 4px 0px rgba(0,0,0,0.5); }
+        .hud { position: absolute; top: 20px; left: 20px; z-index: 5; background: rgba(0, 0, 0, 0.7); color: white; padding: 15px; border-radius: 8px; border: 4px solid #fff; pointer-events: none; display: none;}
+        .hud h2 { margin: 0 0 10px 0; font-size: 1.5rem; text-transform: uppercase; }
+        .hud p { margin: 5px 0; font-size: 1.2rem; }
+    </style>
+</head>
+<body>
+
+    <!-- HUD -->
+    <div id="hud" class="hud pixel-shadow">
+        <h2 id="hud-level">Level 1</h2>
+        <p>Items: <span id="hud-items">0/1</span></p>
+        <p id="hud-tool-name" class="text-yellow-400 font-bold mt-2">Find the Knife!</p>
+    </div>
+
+    <!-- UI Overlay Screens -->
+    <div id="ui-container" class="ui-layer bg-black bg-opacity-60 backdrop-blur-sm">
+        
+        <!-- Main Menu -->
+        <div id="screen-menu" class="interactive bg-white p-10 rounded-xl pixel-shadow text-center max-w-lg mx-4">
+            <h1 class="text-4xl font-extrabold mb-4 text-gray-800">Voxel Kitchen<br>Adventure</h1>
+            <p class="text-gray-600 mb-6 text-lg">Help the Chef find the missing kitchen tools! Avoid the hot coals and navigate the countertops.</p>
+            <div class="mb-6 text-left bg-gray-100 p-4 rounded-lg border-2 border-gray-300">
+                <p class="font-bold text-gray-700 mb-2">Controls:</p>
+                <p class="text-gray-600">WASD or Arrow Keys to Move</p>
+            </div>
+            <button id="btn-start" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-lg text-xl border-b-4 border-green-700 active:border-b-0 active:translate-y-1 transition-all">Start Game</button>
+        </div>
+
+        <!-- Level Transition Screen -->
+        <div id="screen-next-level" class="interactive hidden bg-white p-10 rounded-xl pixel-shadow text-center">
+            <h1 class="text-4xl font-extrabold mb-4 text-blue-600">Level Complete!</h1>
+            <p class="text-gray-600 mb-6 text-lg">You found all the tools here.</p>
+            <button id="btn-next" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-lg text-xl border-b-4 border-blue-700 active:border-b-0 active:translate-y-1 transition-all">Next Level</button>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="screen-game-over" class="interactive hidden bg-white p-10 rounded-xl pixel-shadow text-center">
+            <h1 class="text-4xl font-extrabold mb-4 text-red-600">Ouch! Burned!</h1>
+            <p class="text-gray-600 mb-6 text-lg">You stepped on a hot hazard.</p>
+            <button id="btn-retry" class="bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-8 rounded-lg text-xl border-b-4 border-red-700 active:border-b-0 active:translate-y-1 transition-all">Try Again</button>
+        </div>
+
+        <!-- Victory Screen -->
+        <div id="screen-victory" class="interactive hidden bg-white p-10 rounded-xl pixel-shadow text-center">
+            <h1 class="text-4xl font-extrabold mb-4 text-yellow-500">Victory!</h1>
+            <p class="text-gray-600 mb-6 text-lg">You collected all the kitchen tools and are ready to cook a masterpiece!</p>
+            <button id="btn-restart" class="bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 px-8 rounded-lg text-xl border-b-4 border-purple-700 active:border-b-0 active:translate-y-1 transition-all">Play Again</button>
+        </div>
+
+    </div>
+
+    <!-- WebGL Canvas -->
+    <div id="game-canvas"></div>
+
+    <script>
+        /** --- AUDIO ENGINE (Web Audio API) --- */
+        let audioCtx;
+        let musicOscillator;
+        let musicGainNode;
+        let isMusicPlaying = false;
+        
+        const initAudio = () => {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        };
+
+        const playTone = (freq, type, duration, vol = 0.1) => {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        };
+
+        const playSoundItemCollect = () => {
+            playTone(880, 'square', 0.1, 0.2);
+            setTimeout(() => playTone(1108, 'square', 0.2, 0.2), 100);
+        };
+
+        const playSoundHurt = () => {
+            playTone(150, 'sawtooth', 0.3, 0.3);
+            setTimeout(() => playTone(100, 'sawtooth', 0.4, 0.3), 150);
+        };
+
+        const playSoundWin = () => {
+            [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+                setTimeout(() => playTone(freq, 'square', 0.2, 0.2), i * 150);
+            });
+        };
+
+        // Retro Music Loop Generator
+        const startMusic = () => {
+            if (!audioCtx || isMusicPlaying) return;
+            isMusicPlaying = true;
+            
+            // Simple Arpeggio sequence
+            const sequence = [
+                261.63, 329.63, 392.00, 523.25, // C4, E4, G4, C5
+                392.00, 329.63, 261.63, 196.00  // G4, E4, C4, G3
+            ];
+            
+            let noteIndex = 0;
+            const playNextNote = () => {
+                if (!isMusicPlaying) return;
+                playTone(sequence[noteIndex], 'triangle', 0.2, 0.05);
+                noteIndex = (noteIndex + 1) % sequence.length;
+                setTimeout(playNextNote, 250);
+            };
+            playNextNote();
+        };
+
+        const stopMusic = () => {
+            isMusicPlaying = false;
+        };
+
+
+        /** --- GAME DATA & LEVELS --- */
+        // W = Wall, . = Floor, P = Player, K = Knife, F = Frying Pan, S = Spatula, B = Blender, H = Hazard (Fire)
+        const levels = [
+            { // Level 1 (Easy)
+                id: 1,
+                name: "The Countertop",
+                desc: "Find the Knife!",
+                itemsReq: 1,
+                layout: [
+                    "WWWWWWWW",
+                    "W.P....W",
+                    "W......W",
+                    "W..K...W",
+                    "WWWWWWWW"
+                ]
+            },
+            { // Level 2 (Medium)
+                id: 2,
+                name: "The Stove",
+                desc: "Find the Pan & Spatula!",
+                itemsReq: 2,
+                layout: [
+                    "WWWWWWWWWW",
+                    "W.P....H.W",
+                    "W..H.....W",
+                    "W.F....H.W",
+                    "W.H....S.W",
+                    "WWWWWWWWWW"
+                ]
+            },
+            { // Level 3 (Hard)
+                id: 3,
+                name: "The Pantry Maze",
+                desc: "Find the Blender!",
+                itemsReq: 1,
+                layout: [
+                    "WWWWWWWWWWWW",
+                    "W.P.W......W",
+                    "W...W.W.H..W",
+                    "W.H...W..W.W",
+                    "WWWW..H..W.W",
+                    "W...H....W.W",
+                    "W.B.WWWWWW.W",
+                    "WWWWWWWWWWWW"
+                ]
+            }
+        ];
+
+        let currentLevelIndex = 0;
+        let itemsCollected = 0;
+        let gameState = 'MENU'; // MENU, PLAYING, TRANSITION, GAMEOVER
+        let mapWidth = 0;
+        let mapHeight = 0;
+        let mapData = [];
+        let itemsMap = {};
+        let hazards = [];
+
+
+        /** --- THREE.JS ENGINE SETUP --- */
+        const container = document.getElementById('game-canvas');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+        
+        // Isometric-ish Camera setup
+        const aspect = window.innerWidth / window.innerHeight;
+        const d = 10;
+        const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+        camera.position.set(20, 25, 20); // High angle
+        camera.lookAt(scene.position);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.left = -15;
+        dirLight.shadow.camera.right = 15;
+        dirLight.shadow.camera.top = 15;
+        dirLight.shadow.camera.bottom = -15;
+        scene.add(dirLight);
+
+        // Materials & Geometries
+        const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+        const matWall = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown brickish
+        const matFloor1 = new THREE.MeshLambertMaterial({ color: 0xFFFFFF }); // White tile
+        const matFloor2 = new THREE.MeshLambertMaterial({ color: 0x222222 }); // Black tile
+        const matHazard = new THREE.MeshLambertMaterial({ color: 0xFF4500 }); // Fire red
+        const matPlayerHead = new THREE.MeshLambertMaterial({ color: 0xFFD700 }); // Yellow head
+        const matPlayerBody = new THREE.MeshLambertMaterial({ color: 0xFFFFFF }); // White chef coat
+
+        // Game Objects
+        let playerGroup = new THREE.Group();
+        let levelGroup = new THREE.Group();
+        scene.add(levelGroup);
+        scene.add(playerGroup);
+
+        // Player State
+        const player = {
+            x: 0,
+            z: 0,
+            targetX: 0,
+            targetZ: 0,
+            isMoving: false,
+            mesh: null
+        };
+
+        // Create Voxel Player
+        const buildPlayer = () => {
+            playerGroup.clear();
+            const bodyGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+            const headGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const hatGeo = new THREE.BoxGeometry(0.4, 0.6, 0.4);
+
+            const body = new THREE.Mesh(bodyGeo, matPlayerBody);
+            body.position.y = 0.3;
+            body.castShadow = true;
+
+            const head = new THREE.Mesh(headGeo, matPlayerHead);
+            head.position.y = 0.85;
+            head.castShadow = true;
+
+            const hat = new THREE.Mesh(hatGeo, matPlayerBody);
+            hat.position.y = 1.4;
+            hat.castShadow = true;
+
+            playerGroup.add(body);
+            playerGroup.add(head);
+            playerGroup.add(hat);
+            player.mesh = playerGroup;
+        };
+        buildPlayer();
+
+        // Create Tools (Voxel Art)
+        const createTool = (type) => {
+            const group = new THREE.Group();
+            let mat1, mat2, g1, m1, g2, m2;
+            
+            if (type === 'K') { // Knife
+                mat1 = new THREE.MeshLambertMaterial({color: 0xAAAAAA}); // Blade
+                mat2 = new THREE.MeshLambertMaterial({color: 0x5C4033}); // Handle
+                m1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.8, 0.2), mat1);
+                m2 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.4, 0.25), mat2);
+                m1.position.y = 0.4;
+                m2.position.y = -0.2;
+                group.add(m1, m2);
+            } else if (type === 'F') { // Pan
+                mat1 = new THREE.MeshLambertMaterial({color: 0x111111}); // Pan
+                mat2 = new THREE.MeshLambertMaterial({color: 0x888888}); // Handle
+                m1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.8), mat1);
+                m2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.6), mat2);
+                m2.position.z = 0.7;
+                group.add(m1, m2);
+            } else if (type === 'S') { // Spatula
+                mat1 = new THREE.MeshLambertMaterial({color: 0xDDDDDD}); // Head
+                mat2 = new THREE.MeshLambertMaterial({color: 0x5C4033}); // Handle
+                m1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.5), mat1);
+                m2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.7), mat2);
+                m1.position.z = -0.3;
+                m2.position.z = 0.3;
+                group.add(m1, m2);
+            } else if (type === 'B') { // Blender
+                mat1 = new THREE.MeshLambertMaterial({color: 0x88CCFF, transparent: true, opacity: 0.8}); // Glass
+                mat2 = new THREE.MeshLambertMaterial({color: 0x333333}); // Base
+                m1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.5), mat1);
+                m2 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.4, 0.6), mat2);
+                m1.position.y = 0.6;
+                group.add(m1, m2);
+            }
+
+            group.position.y = 0.5; // Hover height
+            
+            // Add a point light to items to make them pop
+            const light = new THREE.PointLight(0xffffaa, 0.5, 2);
+            group.add(light);
+            
+            return group;
+        };
+
+
+        /** --- GAME LOGIC --- */
+        
+        const loadLevel = (levelIdx) => {
+            const level = levels[levelIdx];
+            levelGroup.clear();
+            itemsMap = {};
+            hazards = [];
+            itemsCollected = 0;
+            
+            mapHeight = level.layout.length;
+            mapWidth = level.layout[0].length;
+            mapData = new Array(mapHeight).fill(0).map(() => new Array(mapWidth).fill('.'));
+
+            // Offset to center the map
+            const offsetX = -mapWidth / 2;
+            const offsetZ = -mapHeight / 2;
+
+            for (let z = 0; z < mapHeight; z++) {
+                for (let x = 0; x < mapWidth; x++) {
+                    const char = level.layout[z][x];
+                    mapData[z][x] = char;
+                    
+                    const worldX = x + offsetX;
+                    const worldZ = z + offsetZ;
+
+                    // Generate Floor (Checkerboard)
+                    if (char !== 'W') {
+                        const floorMat = (x + z) % 2 === 0 ? matFloor1 : matFloor2;
+                        const floor = new THREE.Mesh(blockGeo, floorMat);
+                        floor.position.set(worldX, -0.5, worldZ);
+                        floor.receiveShadow = true;
+                        levelGroup.add(floor);
+                    }
+
+                    // Generate Elements
+                    if (char === 'W') {
+                        const wall = new THREE.Mesh(blockGeo, matWall);
+                        wall.position.set(worldX, 0.5, worldZ);
+                        wall.castShadow = true;
+                        wall.receiveShadow = true;
+                        levelGroup.add(wall);
+                    } else if (char === 'P') {
+                        player.x = worldX;
+                        player.z = worldZ;
+                        player.targetX = worldX;
+                        player.targetZ = worldZ;
+                        playerGroup.position.set(worldX, 0, worldZ);
+                        mapData[z][x] = '.'; // Clear player start from map logic
+                    } else if (['K', 'F', 'S', 'B'].includes(char)) {
+                        const itemObj = createTool(char);
+                        itemObj.position.x = worldX;
+                        itemObj.position.z = worldZ;
+                        levelGroup.add(itemObj);
+                        itemsMap[`${worldX},${worldZ}`] = { char, obj: itemObj };
+                    } else if (char === 'H') {
+                        const hazard = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 0.8), matHazard);
+                        hazard.position.set(worldX, 0.1, worldZ);
+                        levelGroup.add(hazard);
+                        
+                        // Hazard light
+                        const hLight = new THREE.PointLight(0xff4500, 0.8, 1.5);
+                        hLight.position.set(worldX, 0.5, worldZ);
+                        levelGroup.add(hLight);
+                    }
+                }
+            }
+
+            // Update HUD
+            document.getElementById('hud-level').innerText = level.name;
+            document.getElementById('hud-tool-name').innerText = level.desc;
+            updateHUDItems();
+            
+            // Adjust camera to look at center of map
+            camera.position.set(offsetX + 15, 20, offsetZ + 15);
+            camera.lookAt(new THREE.Vector3(offsetX + mapWidth/2, 0, offsetZ + mapHeight/2));
+            camera.updateProjectionMatrix();
+        };
+
+        const updateHUDItems = () => {
+            const level = levels[currentLevelIndex];
+            document.getElementById('hud-items').innerText = `${itemsCollected}/${level.itemsReq}`;
+        };
+
+        const showUI = (id) => {
+            document.getElementById('ui-container').classList.remove('hidden');
+            ['screen-menu', 'screen-next-level', 'screen-game-over', 'screen-victory'].forEach(scr => {
+                document.getElementById(scr).classList.add('hidden');
+            });
+            document.getElementById(id).classList.remove('hidden');
+            document.getElementById('hud').style.display = 'none';
+        };
+
+        const hideUI = () => {
+            document.getElementById('ui-container').classList.add('hidden');
+            document.getElementById('hud').style.display = 'block';
+        };
+
+        const checkTile = (tx, tz) => {
+            // Convert world coords back to map grid coords
+            const gridX = Math.round(tx + mapWidth / 2);
+            const gridZ = Math.round(tz + mapHeight / 2);
+
+            if (gridZ < 0 || gridZ >= mapHeight || gridX < 0 || gridX >= mapWidth) return false;
+            
+            const cell = mapData[gridZ][gridX];
+            
+            if (cell === 'W') return false; // Wall block
+
+            // Check hazards
+            if (cell === 'H') {
+                gameOver();
+                return true; // allows movement onto it, but kills you
+            }
+
+            // Check Items
+            const itemKey = `${tx},${tz}`;
+            if (itemsMap[itemKey]) {
+                collectItem(itemKey);
+                mapData[gridZ][gridX] = '.'; // Clear item from logic
+            }
+
+            return true;
+        };
+
+        const collectItem = (key) => {
+            const item = itemsMap[key];
+            levelGroup.remove(item.obj);
+            delete itemsMap[key];
+            itemsCollected++;
+            updateHUDItems();
+            playSoundItemCollect();
+
+            const level = levels[currentLevelIndex];
+            if (itemsCollected >= level.itemsReq) {
+                levelComplete();
+            }
+        };
+
+        const levelComplete = () => {
+            gameState = 'TRANSITION';
+            playSoundWin();
+            setTimeout(() => {
+                if (currentLevelIndex < levels.length - 1) {
+                    showUI('screen-next-level');
+                } else {
+                    showUI('screen-victory');
+                }
+            }, 1000);
+        };
+
+        const gameOver = () => {
+            gameState = 'GAMEOVER';
+            playSoundHurt();
+            
+            // Death animation (fall over)
+            let fallInt = setInterval(() => {
+                playerGroup.rotation.x -= 0.1;
+                if(playerGroup.rotation.x <= -Math.PI/2) {
+                    clearInterval(fallInt);
+                    showUI('screen-game-over');
+                }
+            }, 30);
+        };
+
+        // Controls
+        window.addEventListener('keydown', (e) => {
+            if (gameState !== 'PLAYING' || player.isMoving) return;
+
+            let nextX = player.targetX;
+            let nextZ = player.targetZ;
+
+            switch (e.key.toLowerCase()) {
+                case 'w': case 'arrowup': nextZ -= 1; break;
+                case 's': case 'arrowdown': nextZ += 1; break;
+                case 'a': case 'arrowleft': nextX -= 1; break;
+                case 'd': case 'arrowright': nextX += 1; break;
+                default: return; // ignore other keys
+            }
+
+            // Face direction
+            if (nextX > player.x) playerGroup.rotation.y = Math.PI / 2;
+            else if (nextX < player.x) playerGroup.rotation.y = -Math.PI / 2;
+            else if (nextZ > player.z) playerGroup.rotation.y = 0;
+            else if (nextZ < player.z) playerGroup.rotation.y = Math.PI;
+
+            if (checkTile(nextX, nextZ)) {
+                player.targetX = nextX;
+                player.targetZ = nextZ;
+                player.isMoving = true;
+            }
+        });
+
+        // Window resize
+        window.addEventListener('resize', () => {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -d * aspect;
+            camera.right = d * aspect;
+            camera.top = d;
+            camera.bottom = -d;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // UI Event Listeners
+        const startGame = () => {
+            initAudio();
+            startMusic();
+            playerGroup.rotation.set(0,0,0);
+            loadLevel(currentLevelIndex);
+            gameState = 'PLAYING';
+            hideUI();
+        };
+
+        document.getElementById('btn-start').addEventListener('click', startGame);
+        
+        document.getElementById('btn-next').addEventListener('click', () => {
+            currentLevelIndex++;
+            startGame();
+        });
+
+        document.getElementById('btn-retry').addEventListener('click', startGame);
+        
+        document.getElementById('btn-restart').addEventListener('click', () => {
+            currentLevelIndex = 0;
+            startGame();
+        });
+
+
+        /** --- RENDER LOOP --- */
+        const clock = new THREE.Clock();
+        
+        const animate = () => {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            if (gameState === 'PLAYING') {
+                // Smooth Movement logic (Lerp)
+                if (player.isMoving) {
+                    const speed = 8 * delta;
+                    
+                    // Move X
+                    if (Math.abs(player.x - player.targetX) > 0.05) {
+                        player.x += (player.targetX > player.x ? speed : -speed);
+                    } else {
+                        player.x = player.targetX;
+                    }
+
+                    // Move Z
+                    if (Math.abs(player.z - player.targetZ) > 0.05) {
+                        player.z += (player.targetZ > player.z ? speed : -speed);
+                    } else {
+                        player.z = player.targetZ;
+                    }
+                    
+                    // Add hopping animation
+                    const distToTarget = Math.sqrt(Math.pow(player.targetX - player.x, 2) + Math.pow(player.targetZ - player.z, 2));
+                    playerGroup.position.y = Math.sin(distToTarget * Math.PI) * 0.3;
+
+                    // Reached target
+                    if (player.x === player.targetX && player.z === player.targetZ) {
+                        player.isMoving = false;
+                        playerGroup.position.y = 0;
+                    }
+                    
+                    playerGroup.position.x = player.x;
+                    playerGroup.position.z = player.z;
+                }
+
+                // Animate Items (floating/rotating)
+                Object.values(itemsMap).forEach(item => {
+                    item.obj.rotation.y += 2 * delta;
+                    item.obj.position.y = 0.5 + Math.sin(time * 4) * 0.1;
+                });
+                
+                // Animate hazards (pulse color slightly)
+                levelGroup.children.forEach(child => {
+                    if (child.material === matHazard) {
+                       child.scale.y = 1 + Math.sin(time * 10) * 0.1;
+                    }
+                });
+            }
+
+            renderer.render(scene, camera);
+        };
+
+        // Start render loop
+        animate();
+
+    </script>
+</body>
+</html>
